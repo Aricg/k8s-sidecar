@@ -20,7 +20,7 @@ _list_for_all_namespaces = {
 }
 
 
-def _get_file_data_and_name(full_filename, content, resource):
+def _get_file_data_and_name(full_filename, content, resource, logger):
     if resource == "secret":
         file_data = base64.b64decode(content).decode()
     else:
@@ -28,14 +28,14 @@ def _get_file_data_and_name(full_filename, content, resource):
 
     if full_filename.endswith(".url"):
         filename = full_filename[:-4]
-        file_data = request(file_data, "GET").text
+        file_data = request(file_data, "GET", logger,).text
     else:
         filename = full_filename
 
     return filename, file_data
 
 
-def listResources(label, targetFolder, url, method, payload, current, folderAnnotation, resource):
+def listResources(label, targetFolder, url, method, payload, current, folderAnnotation, resource, logger):
     v1 = client.CoreV1Api()
     namespace = os.getenv("NAMESPACE", current)
     if namespace == "ALL":
@@ -48,30 +48,30 @@ def listResources(label, targetFolder, url, method, payload, current, folderAnno
         metadata = sec.metadata
         if metadata.labels is None:
             continue
-        print(f'Working on {resource}: {metadata.namespace}/{metadata.name}')
+        logger.info("Working on %s: %s/%s" % (resource, metadata.namespace, metadata.name))
         if label in sec.metadata.labels.keys():
-            print(f"Found {resource} with label")
+            logger.info("Found %s with label" % resource)
             if sec.metadata.annotations is not None:
                 if folderAnnotation in sec.metadata.annotations.keys():
                     destFolder = sec.metadata.annotations[folderAnnotation]
 
             dataMap = sec.data
             if dataMap is None:
-                print(f"No data field in {resource}")
+                logger.info("No data field in %s" % resource)
                 continue
 
             if label in sec.metadata.labels.keys():
                 for data_key in dataMap.keys():
                     filename, filedata = _get_file_data_and_name(data_key, dataMap[data_key],
-                                                                 resource)
+                                                                 resource, logger)
                     writeTextToFile(destFolder, filename, filedata)
 
                     if url is not None:
-                        request(url, method, payload)
+                        request(url, method, logger, payload)
 
 
 def _watch_resource_iterator(label, targetFolder, url, method, payload,
-                             current, folderAnnotation, resource):
+                             current, folderAnnotation, resource, logger):
     v1 = client.CoreV1Api()
     namespace = os.getenv("NAMESPACE", current)
     if namespace == "ALL":
@@ -84,82 +84,81 @@ def _watch_resource_iterator(label, targetFolder, url, method, payload,
         metadata = event['object'].metadata
         if metadata.labels is None:
             continue
-        print(f'Working on {resource} {metadata.namespace}/{metadata.name}')
+        logger.info("Working on %s %s/%s" % (resource, metadata.namespace, metadata.name))
         if label in event['object'].metadata.labels.keys():
-            print(f"{resource} with label found")
+            logger.info("%s with label found" % resource)
             if event['object'].metadata.annotations is not None:
                 if folderAnnotation in event['object'].metadata.annotations.keys():
                     destFolder = event['object'].metadata.annotations[folderAnnotation]
-                    print('Found a folder override annotation, '
-                          f'placing the {resource} in: {destFolder}')
+                    logger.info("Found a folder override annotation, placing the %s in: %s" % (resource, destFolder))
             dataMap = event['object'].data
             if dataMap is None:
-                print(f"{resource} does not have data.")
+                logger.info("%s does not have data." % resource)
                 continue
             eventType = event['type']
             for data_key in dataMap.keys():
-                print(f"File in {resource} {data_key} {eventType}")
-
+                logger.info("File in %s %s %s " % (resource, data_key, eventType))
                 if (eventType == "ADDED") or (eventType == "MODIFIED"):
                     filename, filedata = _get_file_data_and_name(data_key, dataMap[data_key],
-                                                                 resource)
+                                                                 resource, logger)
                     writeTextToFile(destFolder, filename, filedata)
 
                     if url is not None:
-                        request(url, method, payload)
+                        request(url, method, logger, payload)
                 else:
                     filename = data_key[:-4] if data_key.endswith(".url") else data_key
-                    removeFile(destFolder, filename)
+                    removeFile(destFolder, filename, logger)
                     if url is not None:
-                        request(url, method, payload)
+                        request(url, method, logger, payload)
 
 
-def _watch_resource_loop(*args):
+def _watch_resource_loop(logger, *args):
     while True:
         try:
             _watch_resource_iterator(*args)
         except ApiException as e:
             if e.status != 500:
-                print(f"ApiException when calling kubernetes: {e}\n")
+                logger.error("ApiException when calling kubernetes: %s" % e)
             else:
                 raise
         except ProtocolError as e:
-            print(f"ProtocolError when calling kubernetes: {e}\n")
+            logger.error("ProtocolError when calling kubernetes: %s" % e)
         except Exception as e:
-            print(f"Received unknown exception: {e}\n")
+            logger.error("Received unknown exception: %s" % e)
 
 
 def watchForChanges(label, targetFolder, url, method, payload,
-                    current, folderAnnotation, resources):
+                    current, folderAnnotation, resources, logger):
 
     firstProc = Process(target=_watch_resource_loop,
-                        args=(label, targetFolder, url, method, payload,
-                              current, folderAnnotation, resources[0])
+                        args=(logger, label, targetFolder, url, method, payload,
+                              current, folderAnnotation, resources[0], logger)
                         )
     firstProc.start()
 
     if len(resources) == 2:
         secProc = Process(target=_watch_resource_loop,
-                          args=(label, targetFolder, url, method, payload,
-                                current, folderAnnotation, resources[1])
+                          args=(logger, label, targetFolder, url, method, payload,
+                                current, folderAnnotation, resources[1], logger)
                           )
         secProc.start()
 
     while True:
         if not firstProc.is_alive():
-            print(f"Process for {resources[0]} died. Stopping and exiting")
+            logger.info("Process for %s died. Stopping and exiting" % resources[0])
             if len(resources) == 2 and secProc.is_alive():
                 secProc.terminate()
             elif len(resources) == 2:
-                print(f"Process for {resources[1]}  also died...")
+                logger.info("Process for %s also died..." % resources[1])
             raise Exception("Loop died")
 
         if len(resources) == 2 and not secProc.is_alive():
-            print(f"Process for {resources[1]} died. Stopping and exiting")
+            logger.info("Process for %s died. Stopping and exiting" % resources[1])
             if firstProc.is_alive():
                 firstProc.terminate()
             else:
-                print(f"Process for {resources[0]}  also died...")
+                pass
+                logger.info("Process for %s also died..." % resources[0])
             raise Exception("Loop died")
 
         sleep(5)
