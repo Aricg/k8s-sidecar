@@ -1,4 +1,4 @@
-import os, logging, sys, socket, time
+import os, logging, sys, socket, time, requests
 from kubernetes import client, config
 
 from resources import listResources, watchForChanges
@@ -61,16 +61,17 @@ def main():
   else:
     host = '127.0.0.1'
     while True:
-      s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      r = requests.Session()
       try:
-        s.connect((host, 8080))
-        time.sleep(12)
-        logger.info("Jenkins is contactable, continuing.")
-        break
+        http_code = r.get(url).status_code
+        logger.debug("status_code is %d" % http_code)
+        if http_code == 405:
+          logger.info("Jenkins is contactable, continuing.")
+          break
       except Exception:
-        logging.info("Jenkins is not up yet.  Waiting...")
+        logger.info("Jenkins is not up yet.  Waiting...")
         time.sleep(5)
-    s.close()
+
     watchForChanges(label, targetFolder, url, method,
                     payload, namespace, folderAnnotation, resources, logger)
 

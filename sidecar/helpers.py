@@ -34,7 +34,7 @@ def request(url, method, logger, payload=None):
     retryRead = 5 if os.getenv('REQ_RETRY_READ') is None else int(os.getenv('REQ_RETRY_READ'))
     retryBackoffFactor = 0.2 if os.getenv('REQ_RETRY_BACKOFF_FACTOR') is None else float(
         os.getenv('REQ_RETRY_BACKOFF_FACTOR'))
-    timeout = 10 if os.getenv('REQ_TIMEOUT') is None else float(os.getenv('REQ_TIMEOUT'))
+    timeout = 30 if os.getenv('REQ_TIMEOUT') is None else float(os.getenv('REQ_TIMEOUT'))
 
     r = requests.Session()
     retries = Retry(total=retryTotal,
