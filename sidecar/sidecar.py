@@ -65,7 +65,7 @@ def main():
       try:
         http_code = r.get(url).status_code
         logger.debug("status_code is %d" % http_code)
-        if http_code == 405:
+        if (http_code == 405) or (http_code == 403):
           logger.info("Jenkins is contactable, continuing.")
           break
       except Exception:
