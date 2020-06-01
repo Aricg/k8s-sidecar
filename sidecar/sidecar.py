@@ -1,79 +1,70 @@
-import os, logging, sys, socket, time, requests
+#!/usr/bin/env python
+
+import os
+
 from kubernetes import client, config
 
 from resources import listResources, watchForChanges
 
-def setup_custom_logger(name):
-  formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
-                                datefmt='%Y-%m-%d %H:%M:%S')
-  handler = logging.FileHandler('log.txt', mode='w')
-  handler.setFormatter(formatter)
-  screen_handler = logging.StreamHandler(stream=sys.stdout)
-  screen_handler.setFormatter(formatter)
-  logger = logging.getLogger(name)
-  logger.setLevel(logging.INFO)
-  logger.addHandler(handler)
-  logger.addHandler(screen_handler)
-  return logger
+from helpers import timestamp
 
 def main():
-  logger = setup_custom_logger('sidecar')
-  if os.path.exists('/app/reload_successful.txt'):
-    os.remove('/app/reload_successful.txt')
-  with open('/app/reload_successful.txt', 'w', encoding='utf-8') as f:
-    f.write("true")
-  logger.info("Starting collector")
-  folderAnnotation = os.getenv('FOLDER_ANNOTATIONS')
+  print(f"{timestamp()} Starting collector")
+
+  folderAnnotation = os.getenv("FOLDER_ANNOTATION")
   if folderAnnotation is None:
-    logger.info("No folder annotation was provided, defaulting to k8s-sidecar-target-directory")
+    print(f"{timestamp()} No folder annotation was provided, "
+          "defaulting to k8s-sidecar-target-directory")
     folderAnnotation = "k8s-sidecar-target-directory"
 
-  label = os.getenv('LABEL')
+  label = os.getenv("LABEL")
   if label is None:
-    logger.error("Should have added LABEL as environment variable! Exit")
+    print(f"{timestamp()} Should have added LABEL as environment variable! Exit")
     return -1
 
-  targetFolder = os.getenv('FOLDER')
+  labelValue = os.getenv("LABEL_VALUE")
+  if labelValue:
+    print(f"{timestamp()} Filter labels with value: {labelValue}")
+
+  targetFolder = os.getenv("FOLDER")
   if targetFolder is None:
-    logger.error("Should have added FOLDER as environment variable! Exit")
+    print(f"{timestamp()} Should have added FOLDER as environment variable! Exit")
     return -1
 
-  resources = os.getenv('RESOURCE', 'configmap')
+  resources = os.getenv("RESOURCE", "configmap")
   resources = ("secret", "configmap") if resources == "both" else (resources, )
-  logger.info("Selected resource type: %s" % resources)
-  method = os.getenv('REQ_METHOD')
-  url = os.getenv('REQ_URL')
-  payload = os.getenv('REQ_PAYLOAD')
-  config.load_incluster_config()
-  logger.info("Config for cluster api loaded...")
-  namespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+  print(f"{timestamp()} Selected resource type: {resources}")
 
-  if os.getenv('SKIP_TLS_VERIFY') == 'true':
+  method = os.getenv("REQ_METHOD")
+  url = os.getenv("REQ_URL")
+  payload = os.getenv("REQ_PAYLOAD")
+
+  config.load_incluster_config()
+  print(f"{timestamp()} Config for cluster api loaded...")
+  currentNamespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+
+  if os.getenv("SKIP_TLS_VERIFY") == "true":
     configuration = client.Configuration()
     configuration.verify_ssl = False
     configuration.debug = False
     client.Configuration.set_default(configuration)
 
+  uniqueFilenames = os.getenv("UNIQUE_FILENAMES")
+  if uniqueFilenames is not None and uniqueFilenames.lower() == "true":
+    print(f"{timestamp()} Unique filenames will be enforced.")
+    uniqueFilenames = True
+  else:
+    print(f"{timestamp()} Unique filenames will not be enforced.")
+    uniqueFilenames = False
+
   if os.getenv("METHOD") == "LIST":
     for res in resources:
-      listResources(label, targetFolder, url, method, payload,
-                    namespace, folderAnnotation, res, logger)
+      listResources(label, labelValue, targetFolder, url, method, payload,
+                    currentNamespace, folderAnnotation, res, uniqueFilenames)
   else:
-    host = '127.0.0.1'
-    while True:
-      r = requests.Session()
-      try:
-        http_code = r.get(url).status_code
-        logger.debug("status_code is %d" % http_code)
-        if (http_code == 405) or (http_code == 403):
-          logger.info("Jenkins is contactable, continuing.")
-          break
-      except Exception:
-        logger.info("Jenkins is not up yet.  Waiting...")
-        time.sleep(5)
+    watchForChanges(os.getenv("METHOD"), label, labelValue, targetFolder, url, method,
+                    payload, currentNamespace, folderAnnotation, resources, uniqueFilenames)
 
-    watchForChanges(label, targetFolder, url, method,
-                    payload, namespace, folderAnnotation, resources, logger)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   main()

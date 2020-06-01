@@ -1,13 +1,18 @@
-FROM        python:3.7-slim
-WORKDIR     /app
-COPY        requirements.txt .
-RUN         pip install -r requirements.txt
-RUN         groupadd -r -g 1000 jenkins && useradd -r -u 1000 -g jenkins jenkins
-USER        root
-RUN         chown -R jenkins:jenkins /app
-RUN         apt-get update && apt-get install -y curl
-COPY        sidecar/* ./
-RUN         chmod 700 /app
+FROM        python:3.7-alpine
 ENV         PYTHONUNBUFFERED=1
-USER        jenkins
+WORKDIR     /app
+
+COPY        requirements.txt .
+RUN         apk add --no-cache gcc && \
+            apk add --no-cache curl && \
+	    pip install -r requirements.txt && \
+	    apk del -r gcc && \
+            rm -rf /var/cache/apk/* requirements.txt
+
+COPY sidecar/* ./
+
+# Use the nobody user's numeric UID/GID to satisfy MustRunAsNonRoot PodSecurityPolicies
+# https://kubernetes.io/docs/concepts/policy/pod-security-policy/#users-and-groups
+USER 65534:65534
+
 CMD         [ "python", "-u", "/app/sidecar.py" ]
